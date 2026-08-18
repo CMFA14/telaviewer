@@ -1,4 +1,4 @@
-// TelaViewer - WebRTC P2P Screen Sharing, Voice Chat & Advanced Chat (File Transfer + Pinned Links)
+// TelaViewer - Floating Bubble UI, Dynamic Media Islands & P2P Engine
 
 const state = {
   ws: null,
@@ -38,13 +38,14 @@ const state = {
   recordTimerInterval: null,
   statsInterval: null,
   
-  // Conexão
+  // Conexão e Peers
   radminIp: null,
   serverPort: 3000,
   unreadCount: 0,
   isChatOpen: false,
   remotePeerId: null,
   remoteUsername: 'Amigo',
+  peersMap: new Map(), // peerId -> { username, sharing, ping }
 
   // Link Fixado
   pinnedLink: null
@@ -66,20 +67,31 @@ const elements = {
   roomInput: document.getElementById('roomInput'),
   btnChangeRoom: document.getElementById('btnChangeRoom'),
   usernameInput: document.getElementById('usernameInput'),
+  myAvatarMini: document.getElementById('myAvatarMini'),
   btnCopyInvite: document.getElementById('btnCopyInvite'),
   copyInviteText: document.getElementById('copyInviteText'),
-  detectedRadminIp: document.getElementById('detectedRadminIp'),
   
-  // Voz / Overlay
-  voicePanel: document.getElementById('voicePanel'),
-  voiceStatusText: document.getElementById('voiceStatusText'),
+  // Dynamic Media Island (Topo)
+  dynamicMediaIsland: document.getElementById('dynamicMediaIsland'),
+  mediaOrbIcon: document.getElementById('mediaOrbIcon'),
+  mediaTag: document.getElementById('mediaTag'),
+  mediaTitle: document.getElementById('mediaTitle'),
+  btnMediaOpen: document.getElementById('btnMediaOpen'),
+  btnUnpinMedia: document.getElementById('btnUnpinMedia'),
+  
+  // Presença & Voz (Ilha Lateral)
+  voiceFloatingIsland: document.getElementById('voiceFloatingIsland'),
   voiceCount: document.getElementById('voiceCount'),
+  bubblePeersContainer: document.getElementById('bubblePeersContainer'),
   avatarSelfWrapper: document.getElementById('avatarSelfWrapper'),
   avatarFriendWrapper: document.getElementById('avatarFriendWrapper'),
   selfVoiceName: document.getElementById('selfVoiceName'),
   friendVoiceName: document.getElementById('friendVoiceName'),
   selfMicState: document.getElementById('selfMicState'),
   friendMicState: document.getElementById('friendMicState'),
+  selfBadge: document.getElementById('selfBadge'),
+  friendBadge: document.getElementById('friendBadge'),
+  friendPingChip: document.getElementById('friendPingChip'),
   selfVuMeter: document.getElementById('selfVuMeter'),
   friendVoiceVolume: document.getElementById('friendVoiceVolume'),
   friendVoiceVolLabel: document.getElementById('friendVoiceVolLabel'),
@@ -107,7 +119,7 @@ const elements = {
   btnPip: document.getElementById('btnPip'),
   btnFullscreen: document.getElementById('btnFullscreen'),
   
-  // Dock
+  // Dock Flutuante
   btnShareScreen: document.getElementById('btnShareScreen'),
   shareBtnLabel: document.getElementById('shareBtnLabel'),
   btnQualitySettings: document.getElementById('btnQualitySettings'),
@@ -131,7 +143,7 @@ const elements = {
   statBitrate: document.getElementById('statBitrate'),
   statPing: document.getElementById('statPing'),
   
-  // Chat Avançado
+  // Chat Flutuante
   btnToggleChat: document.getElementById('btnToggleChat'),
   chatSidebar: document.getElementById('chatSidebar'),
   btnCloseChat: document.getElementById('btnCloseChat'),
@@ -143,7 +155,7 @@ const elements = {
   chatFileInput: document.getElementById('chatFileInput'),
   dragDropOverlay: document.getElementById('dragDropOverlay'),
   
-  // Link Fixado
+  // Link Fixado no Chat
   btnPinLinkPrompt: document.getElementById('btnPinLinkPrompt'),
   pinnedLinkBar: document.getElementById('pinnedLinkBar'),
   pinnedLinkIcon: document.getElementById('pinnedLinkIcon'),
@@ -195,7 +207,6 @@ async function populateAudioDevices() {
     const mics = devices.filter(d => d.kind === 'audioinput');
     const speakers = devices.filter(d => d.kind === 'audiooutput');
 
-    // Microfones
     if (mics.length === 0) {
       const opt = document.createElement('option');
       opt.value = '';
@@ -214,7 +225,6 @@ async function populateAudioDevices() {
       });
     }
 
-    // Saídas
     if (speakers.length === 0) {
       const opt = document.createElement('option');
       opt.value = '';
@@ -276,7 +286,6 @@ async function switchMicrophone(deviceId) {
 
     showToast('🎙️ Microfone alterado!');
   } catch (err) {
-    console.error('Erro ao trocar microfone:', err);
     showToast('⚠️ Erro ao trocar microfone: ' + err.message);
   }
 }
@@ -336,21 +345,18 @@ async function initVoiceChat() {
     });
 
     state.localVoiceStream = stream;
-    const audioTrack = stream.getAudioTracks()[0];
-
     setupSelfAudioAnalyser(stream);
 
     if (state.voiceMode === 'ptt') {
       setMicEnabled(false);
-      elements.selfMicState.textContent = 'Push-to-Talk (Segure V)';
+      elements.selfMicState.textContent = 'Push-to-Talk (V)';
     } else {
-      elements.selfMicState.textContent = 'Microfone Ativo';
+      elements.selfMicState.textContent = 'Microfone Aberto';
     }
 
     await populateAudioDevices();
     showToast('🎙️ Chat de Voz Conectado!');
   } catch (err) {
-    console.warn('Microfone não autorizado:', err);
     elements.selfMicState.textContent = 'Microfone Desativado';
     elements.btnToggleMic.classList.add('muted');
     state.isMicMuted = true;
@@ -395,19 +401,23 @@ function startVadLoop() {
       for (let i = 0; i < selfData.length; i++) sum += selfData[i];
       const avg = sum / selfData.length;
 
-      const vuPercent = Math.min(100, Math.round((avg / 80) * 100));
-      const vuBar = elements.selfVuMeter.querySelector('.vu-bar');
-      if (vuBar) vuBar.style.height = `${vuPercent}%`;
+      const vuPercent = Math.min(100, Math.round((avg / 70) * 100));
+      const vuFill = elements.selfVuMeter.querySelector('.vu-fill');
+      if (vuFill) vuFill.style.width = `${vuPercent}%`;
 
       if (avg > 8) {
         elements.avatarSelfWrapper.classList.add('speaking');
+        elements.selfBadge.textContent = 'Falando';
+        elements.selfBadge.className = 'status-indicator-badge speaking';
       } else {
         elements.avatarSelfWrapper.classList.remove('speaking');
+        elements.selfBadge.textContent = 'Você';
+        elements.selfBadge.className = 'status-indicator-badge live';
       }
     } else {
       elements.avatarSelfWrapper.classList.remove('speaking');
-      const vuBar = elements.selfVuMeter.querySelector('.vu-bar');
-      if (vuBar) vuBar.style.height = '0%';
+      const vuFill = elements.selfVuMeter.querySelector('.vu-fill');
+      if (vuFill) vuFill.style.width = '0%';
     }
 
     // Fala do Amigo
@@ -420,9 +430,13 @@ function startVadLoop() {
       if (avg > 8) {
         elements.avatarFriendWrapper.classList.add('speaking');
         elements.friendMicState.textContent = 'Falando...';
+        elements.friendBadge.textContent = 'Falando';
+        elements.friendBadge.className = 'status-indicator-badge speaking';
       } else {
         elements.avatarFriendWrapper.classList.remove('speaking');
         elements.friendMicState.textContent = 'Conectado';
+        elements.friendBadge.textContent = 'Online';
+        elements.friendBadge.className = 'status-indicator-badge live';
       }
     }
 
@@ -451,13 +465,13 @@ function toggleMute() {
     elements.btnToggleMic.classList.add('muted');
     elements.btnToggleMic.classList.remove('active');
     elements.micLabel.textContent = 'Mutado';
-    elements.selfMicState.textContent = 'Microfone Mutado';
+    elements.selfMicState.textContent = 'Mutado';
     showToast('🔇 Microfone mutado');
   } else {
     elements.btnToggleMic.classList.remove('muted');
     elements.btnToggleMic.classList.add('active');
     elements.micLabel.textContent = 'Microfone';
-    elements.selfMicState.textContent = 'Microfone Ativo';
+    elements.selfMicState.textContent = 'Microfone Aberto';
     showToast('🎙️ Microfone ativado');
   }
 }
@@ -470,7 +484,7 @@ function toggleDeafen() {
     elements.remoteVoiceAudio.muted = true;
     elements.remoteVideo.muted = true;
 
-    elements.btnToggleDeafen.classList.add('deafened');
+    elements.btnToggleDeafen.classList.add('muted');
     elements.btnToggleMic.classList.add('muted');
     elements.selfMicState.textContent = 'Ensurdecido';
     showToast('🎧 Áudio e Microfone Desativados');
@@ -479,9 +493,9 @@ function toggleDeafen() {
     elements.remoteVoiceAudio.muted = false;
     elements.remoteVideo.muted = false;
 
-    elements.btnToggleDeafen.classList.remove('deafened');
+    elements.btnToggleDeafen.classList.remove('muted');
     if (!state.isMicMuted) elements.btnToggleMic.classList.remove('muted');
-    elements.selfMicState.textContent = state.isMicMuted ? 'Mutado' : 'Microfone Ativo';
+    elements.selfMicState.textContent = state.isMicMuted ? 'Mutado' : 'Microfone Aberto';
     showToast('🔊 Áudio restaurado');
   }
 }
@@ -510,7 +524,7 @@ window.addEventListener('keyup', (e) => {
   if (state.voiceMode === 'ptt' && (e.key === 'v' || e.key === 'V') && state.isPttActive) {
     state.isPttActive = false;
     setMicEnabled(false);
-    elements.selfMicState.textContent = 'Push-to-Talk (Segure V)';
+    elements.selfMicState.textContent = 'Push-to-Talk (V)';
     elements.avatarSelfWrapper.classList.remove('speaking');
   }
 });
@@ -526,27 +540,21 @@ async function initNetworkInfo() {
     
     if (data.primaryRadminIp) {
       state.radminIp = data.primaryRadminIp;
-      elements.detectedRadminIp.textContent = `https://${state.radminIp}:${state.serverPort}`;
     } else if (data.interfaces && data.interfaces.length > 0) {
       state.radminIp = data.interfaces[0].ip;
-      elements.detectedRadminIp.textContent = `https://${state.radminIp}:${state.serverPort}`;
-    } else {
-      elements.detectedRadminIp.textContent = `https://localhost:${state.serverPort}`;
     }
-  } catch (err) {
-    elements.detectedRadminIp.textContent = `https://localhost:${state.serverPort}`;
-  }
+  } catch (err) {}
 }
 
 function connectSignaling() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${protocol}//${window.location.host}`;
 
-  updateStatus('connecting', 'Conectando ao Servidor...');
+  updateStatus('connecting', 'Conectando...');
   state.ws = new WebSocket(wsUrl);
 
   state.ws.onopen = () => {
-    updateStatus('connected', 'Conectado à Sala');
+    updateStatus('connected', 'Conectado');
     sendSignaling({
       type: 'join',
       room: state.room,
@@ -569,7 +577,7 @@ function connectSignaling() {
   };
 
   state.ws.onerror = () => {
-    updateStatus('disconnected', 'Erro na conexão');
+    updateStatus('disconnected', 'Erro');
   };
 }
 
@@ -590,7 +598,12 @@ async function handleSignalingMessage(data) {
         state.remotePeerId = data.peers[0].id;
         state.remoteUsername = data.peers[0].username || 'Amigo';
         elements.friendVoiceName.textContent = state.remoteUsername;
-        elements.voiceCount.textContent = '2 conectados';
+        elements.friendBadge.textContent = 'Online';
+        elements.friendBadge.className = 'status-indicator-badge live';
+        elements.friendMicState.textContent = 'Conectado';
+        elements.voiceCount.textContent = '2 Online';
+      } else {
+        elements.voiceCount.textContent = '1 Online';
       }
       for (const peer of data.peers) {
         initiatePeerConnection(peer.id);
@@ -601,26 +614,31 @@ async function handleSignalingMessage(data) {
       state.remotePeerId = data.peer.id;
       state.remoteUsername = data.peer.username || 'Amigo';
       elements.friendVoiceName.textContent = state.remoteUsername;
-      elements.voiceCount.textContent = '2 conectados';
+      elements.friendBadge.textContent = 'Online';
+      elements.friendBadge.className = 'status-indicator-badge live';
+      elements.friendMicState.textContent = 'Conectado';
+      elements.voiceCount.textContent = '2 Online';
 
       showToast(`👋 ${state.remoteUsername} entrou na sala!`);
-      appendSystemMessage(`${state.remoteUsername} entrou.`);
+      appendSystemMessage(`${state.remoteUsername} entrou na sala.`);
       getOrCreatePeerConnection(data.peer.id);
       break;
 
     case 'peer-left':
       showToast(`🚪 ${state.remoteUsername} saiu.`);
       appendSystemMessage(`${state.remoteUsername} saiu.`);
-      elements.voiceCount.textContent = '1 conectado';
+      elements.voiceCount.textContent = '1 Online';
       elements.friendMicState.textContent = 'Desconectado';
+      elements.friendBadge.textContent = 'Offline';
+      elements.friendBadge.className = 'status-indicator-badge waiting';
       closePeer(data.peerId);
       break;
 
     case 'sharing-status-changed':
       if (data.sharing) {
-        showToast(`📺 ${state.remoteUsername} começou a transmitir a tela!`);
+        showToast(`📺 ${state.remoteUsername} começou a transmitir!`);
       } else {
-        showToast(`⏹️ Transmissão de tela finalizada.`);
+        showToast(`⏹️ Transmissão finalizada.`);
         hideRemoteStream();
       }
       break;
@@ -659,7 +677,6 @@ function getOrCreatePeerConnection(peerId) {
     return state.peerConnections.get(peerId);
   }
 
-  console.log('[WebRTC] Criando RTCPeerConnection para:', peerId);
   const pc = new RTCPeerConnection(rtcConfig);
   state.peerConnections.set(peerId, pc);
 
@@ -692,18 +709,15 @@ function getOrCreatePeerConnection(peerId) {
   };
 
   pc.oniceconnectionstatechange = () => {
-    console.log('[WebRTC ICE State]:', pc.iceConnectionState);
     if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-      updateStatus('connected', 'P2P Direto Ativo (60 FPS)');
+      updateStatus('connected', 'P2P Ativo (60 FPS)');
       startStatsMonitor(pc);
     } else if (pc.iceConnectionState === 'failed') {
-      console.warn('[WebRTC] Reiniciando ICE...');
       pc.restartIce();
     }
   };
 
   pc.ontrack = (event) => {
-    console.log('[WebRTC ontrack] Track recebido:', event.track.kind, event.streams);
     const track = event.track;
     const stream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([track]);
 
@@ -720,7 +734,9 @@ function getOrCreatePeerConnection(peerId) {
       elements.remoteVoiceAudio.play().catch(() => {});
 
       setupFriendAudioAnalyser(stream);
-      elements.friendMicState.textContent = 'Conectado (Ouvindo)';
+      elements.friendMicState.textContent = 'Conectado';
+      elements.friendBadge.textContent = 'Online';
+      elements.friendBadge.className = 'status-indicator-badge live';
     }
   };
 
@@ -738,9 +754,7 @@ async function initiatePeerConnection(peerId) {
       target: peerId,
       offer: offer
     });
-  } catch (err) {
-    console.error('[WebRTC] Erro oferta:', err);
-  }
+  } catch (err) {}
 }
 
 async function handleOffer(data) {
@@ -789,9 +803,7 @@ async function handleOffer(data) {
       target: data.sender,
       answer: answer
     });
-  } catch (err) {
-    console.error('[WebRTC] Erro no handleOffer:', err);
-  }
+  } catch (err) {}
 }
 
 async function handleAnswer(data) {
@@ -802,9 +814,7 @@ async function handleAnswer(data) {
         await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
         await flushQueuedCandidates(data.sender, pc);
       }
-    } catch (err) {
-      console.error('[WebRTC] Erro no handleAnswer:', err);
-    }
+    } catch (err) {}
   }
 }
 
@@ -875,9 +885,9 @@ async function startScreenShare() {
     state.isSharing = true;
 
     elements.localVideo.srcObject = stream;
-    elements.localCard.style.display = 'flex';
+    elements.localCard.style.display = 'block';
     elements.btnShareScreen.classList.add('sharing');
-    elements.shareBtnLabel.textContent = 'Parar Transmissão';
+    elements.shareBtnLabel.textContent = 'Parar Tela';
 
     const videoTrack = stream.getVideoTracks()[0];
     const audioTrack = stream.getAudioTracks()[0];
@@ -909,7 +919,7 @@ async function startScreenShare() {
       videoTrack.onended = () => stopScreenShare();
     }
 
-    showToast('🎉 Tela transmitida com sucesso!');
+    showToast('🎉 Transmissão iniciada em 60 FPS!');
   } catch (err) {
     if (err.name !== 'NotAllowedError') {
       showToast('⚠️ Erro ao capturar tela: ' + err.message);
@@ -927,7 +937,7 @@ function stopScreenShare() {
   elements.localVideo.srcObject = null;
   elements.localCard.style.display = 'none';
   elements.btnShareScreen.classList.remove('sharing');
-  elements.shareBtnLabel.textContent = 'Compartilhar Tela';
+  elements.shareBtnLabel.textContent = 'Transmitir Tela';
 
   for (const [peerId, pc] of state.peerConnections.entries()) {
     pc.getSenders().forEach(sender => {
@@ -938,7 +948,7 @@ function stopScreenShare() {
   }
 
   sendSignaling({ type: 'sharing-status', sharing: false });
-  showToast('Transmissão de tela finalizada.');
+  showToast('Transmissão finalizada.');
 }
 
 // ============================================================================
@@ -1025,7 +1035,7 @@ function startRecording() {
     state.isRecording = true;
     state.recordStartTime = Date.now();
 
-    elements.btnRecord.classList.add('recording');
+    elements.btnRecord.classList.add('active');
     elements.recordLabel.textContent = '00:00';
 
     state.recordTimerInterval = setInterval(() => {
@@ -1047,7 +1057,7 @@ function stopRecording() {
   }
   state.isRecording = false;
   clearInterval(state.recordTimerInterval);
-  elements.btnRecord.classList.remove('recording');
+  elements.btnRecord.classList.remove('active');
   elements.recordLabel.textContent = 'Gravar';
 }
 
@@ -1084,6 +1094,7 @@ function startStatsMonitor(pc) {
           if (report.currentRoundTripTime !== undefined) {
             const rttMs = Math.round(report.currentRoundTripTime * 1000);
             elements.statPing.textContent = `${rttMs} ms`;
+            elements.friendPingChip.textContent = `${rttMs} ms`;
           }
         }
       });
@@ -1099,7 +1110,7 @@ function stopStatsMonitor() {
 }
 
 // ============================================================================
-// Chat Avançado: Texto, Transferência de Arquivos e Links Fixados
+// Chat e Links Fixados (Dynamic Island & Speech Bubbles)
 // ============================================================================
 function handleIncomingChat(data) {
   const isSelf = data.sender === state.myId;
@@ -1122,7 +1133,7 @@ function handleIncomingChat(data) {
   if (!state.isChatOpen && !isSelf) {
     state.unreadCount++;
     elements.chatUnreadBadge.textContent = state.unreadCount;
-    elements.chatUnreadBadge.style.display = 'inline-block';
+    elements.chatUnreadBadge.style.display = 'flex';
   }
 }
 
@@ -1137,9 +1148,9 @@ function handleIncomingFile(data) {
 
   let mediaHtml = '';
   if (isImage) {
-    mediaHtml = `<img src="${data.fileData}" class="chat-image-preview" alt="${escapeHtml(data.fileName)}" title="Clique para abrir imagem original">`;
+    mediaHtml = `<img src="${data.fileData}" class="chat-image-preview" alt="${escapeHtml(data.fileName)}" title="Clique para ampliar">`;
   } else if (isAudio) {
-    mediaHtml = `<audio controls class="chat-audio-player" src="${data.fileData}"></audio>`;
+    mediaHtml = `<audio controls style="width:100%; margin-top:6px;" src="${data.fileData}"></audio>`;
   }
 
   msgEl.innerHTML = `
@@ -1150,30 +1161,16 @@ function handleIncomingFile(data) {
     <div class="chat-msg-bubble">
       ${mediaHtml}
       <div class="chat-file-card">
-        <div class="file-icon">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-            <polyline points="14 2 14 8 20 8"></polyline>
-            <line x1="16" y1="13" x2="8" y2="13"></line>
-            <line x1="16" y1="17" x2="8" y2="17"></line>
-          </svg>
-        </div>
+        <div class="file-icon">📁</div>
         <div class="file-details">
-          <span class="file-name" title="${escapeHtml(data.fileName)}">${escapeHtml(data.fileName)}</span>
+          <span class="file-name">${escapeHtml(data.fileName)}</span>
           <span class="file-size">${formattedSize}</span>
         </div>
-        <button type="button" class="btn-file-download" title="Baixar Arquivo">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-            <polyline points="7 10 12 15 17 10"></polyline>
-            <line x1="12" y1="15" x2="12" y2="3"></line>
-          </svg>
-        </button>
+        <button type="button" class="btn-file-download" title="Baixar Arquivo">⬇️</button>
       </div>
     </div>
   `;
 
-  // Listener para download do arquivo
   const downloadBtn = msgEl.querySelector('.btn-file-download');
   if (downloadBtn) {
     downloadBtn.addEventListener('click', () => {
@@ -1184,33 +1181,21 @@ function handleIncomingFile(data) {
     });
   }
 
-  // Se for imagem, clique abre em nova guia
-  const imgPreview = msgEl.querySelector('.chat-image-preview');
-  if (imgPreview) {
-    imgPreview.addEventListener('click', () => {
-      const win = window.open();
-      win.document.write(`<img src="${data.fileData}" style="max-width:100%;">`);
-    });
-  }
-
   elements.chatMessages.appendChild(msgEl);
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
 
   if (!state.isChatOpen && !isSelf) {
     state.unreadCount++;
     elements.chatUnreadBadge.textContent = state.unreadCount;
-    elements.chatUnreadBadge.style.display = 'inline-block';
-    showToast(`📁 ${data.username} enviou um arquivo: ${data.fileName}`);
+    elements.chatUnreadBadge.style.display = 'flex';
+    showToast(`📁 ${data.username} enviou: ${data.fileName}`);
   }
 }
 
-// Envio de Arquivo Local
 function sendFile(file) {
   if (!file) return;
-
-  // Limite razoável de 150MB por arquivo para transferência via WebSockets
   if (file.size > 150 * 1024 * 1024) {
-    showToast('⚠️ O arquivo excede o limite de 150MB.');
+    showToast('⚠️ Limite de 150MB por arquivo.');
     return;
   }
 
@@ -1231,47 +1216,39 @@ function sendFile(file) {
   reader.readAsDataURL(file);
 }
 
-// Links Fixados (Spotify Jam, Twitch, YouTube, etc.)
+// Atualização da Ilha Dinâmica de Mídia
 function handlePinnedLinkUpdate(pinData) {
   state.pinnedLink = pinData;
   if (!pinData) {
+    elements.dynamicMediaIsland.style.display = 'none';
     elements.pinnedLinkBar.style.display = 'none';
     return;
   }
 
+  // Top Dynamic Island
+  elements.mediaTitle.textContent = pinData.title;
+  elements.mediaTitle.href = pinData.url;
+  elements.btnMediaOpen.href = pinData.url;
+  elements.dynamicMediaIsland.style.display = 'flex';
+
+  // Chat Pinned Capsule
   elements.pinnedLinkTitle.textContent = pinData.title;
   elements.pinnedLinkTitle.href = pinData.url;
   elements.btnOpenPinned.href = pinData.url;
+  elements.pinnedLinkBar.style.display = 'flex';
 
-  // Escolha do ícone
   const iconType = pinData.iconType || detectLinkType(pinData.url);
-  elements.pinnedLinkIcon.className = `pinned-link-icon ${iconType}`;
-
   if (iconType === 'spotify') {
-    elements.pinnedLinkIcon.innerHTML = `
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-        <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm4.586 14.424a.625.625 0 0 1-.86.207c-2.355-1.439-5.32-1.764-8.814-.964a.624.624 0 1 1-.278-1.218c3.824-.875 7.106-.5 9.745 1.115a.625.625 0 0 1 .207.86zm1.226-2.729a.782.782 0 0 1-1.077.258c-2.697-1.658-6.808-2.138-9.998-1.17a.782.782 0 1 1-.453-1.498c3.642-1.106 8.19-.57 11.27 1.333a.782.782 0 0 1 .258 1.077zm.105-2.836C14.685 9.07 9.355 8.89 6.26 9.83a.937.937 0 1 1-.548-1.792c3.553-1.078 9.43-.872 13.15 1.336a.937.937 0 0 1-1.045 1.585z"/>
-      </svg>`;
+    elements.mediaTag.textContent = 'SPOTIFY JAM ATIVA';
   } else if (iconType === 'youtube') {
-    elements.pinnedLinkIcon.innerHTML = `
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-        <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
-      </svg>`;
+    elements.mediaTag.textContent = 'VÍDEO YOUTUBE';
   } else if (iconType === 'twitch') {
-    elements.pinnedLinkIcon.innerHTML = `
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-        <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z"/>
-      </svg>`;
+    elements.mediaTag.textContent = 'LIVE TWITCH';
   } else {
-    elements.pinnedLinkIcon.innerHTML = `
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-      </svg>`;
+    elements.mediaTag.textContent = 'LINK FIXADO';
   }
 
-  elements.pinnedLinkBar.style.display = 'flex';
-  showToast(`📌 Link fixado por ${pinData.pinnedBy}: ${pinData.title}`);
+  showToast(`📌 ${pinData.title}`);
 }
 
 function detectLinkType(url) {
@@ -1288,9 +1265,9 @@ function pinCurrentLink(url, customTitle) {
   let title = customTitle.trim();
   
   if (!title) {
-    if (iconType === 'spotify') title = '🎵 Spotify Jam - Ouvir Juntos';
-    else if (iconType === 'youtube') title = '🎥 Vídeo do YouTube';
-    else if (iconType === 'twitch') title = '🟣 Live na Twitch';
+    if (iconType === 'spotify') title = 'Spotify Jam - Bora ouvir juntos!';
+    else if (iconType === 'youtube') title = 'Vídeo do YouTube';
+    else if (iconType === 'twitch') title = 'Live na Twitch';
     else title = url;
   }
 
@@ -1308,13 +1285,14 @@ function pinCurrentLink(url, customTitle) {
 
 function unpinLink() {
   sendSignaling({ type: 'unpin-link' });
+  elements.dynamicMediaIsland.style.display = 'none';
   elements.pinnedLinkBar.style.display = 'none';
-  showToast('Link desafixado do chat.');
+  showToast('Link desafixado.');
 }
 
 function appendSystemMessage(text) {
   const msg = document.createElement('div');
-  msg.className = 'chat-system-msg';
+  msg.className = 'chat-bubble-system';
   msg.textContent = text;
   elements.chatMessages.appendChild(msg);
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
@@ -1335,7 +1313,7 @@ function toggleChat() {
 
 function autoLinkify(text) {
   const urlRegex = /(https?:\/\/[^\s]+)/g;
-  return text.replace(urlRegex, url => `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:var(--accent-color); text-decoration:underline;">${url}</a>`);
+  return text.replace(urlRegex, url => `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:var(--accent-emerald); text-decoration:underline;">${url}</a>`);
 }
 
 function formatBytes(bytes, decimals = 1) {
@@ -1351,14 +1329,14 @@ function formatBytes(bytes, decimals = 1) {
 // Utilitários de UI
 // ============================================================================
 function updateStatus(status, text) {
-  elements.connectionStatus.className = `status-badge ${status}`;
+  elements.connectionStatus.className = `bubble-pill-status ${status}`;
   elements.connectionStatus.querySelector('.status-text').textContent = text;
 }
 
 function showToast(message) {
   elements.toast.textContent = message;
   elements.toast.classList.add('show');
-  setTimeout(() => elements.toast.classList.remove('show'), 3000);
+  setTimeout(() => elements.toast.classList.remove('show'), 3200);
 }
 
 function copyInviteLink() {
@@ -1367,7 +1345,7 @@ function copyInviteLink() {
   navigator.clipboard.writeText(inviteUrl).then(() => {
     elements.copyInviteText.textContent = 'Copiado!';
     showToast(`📋 Link copiado: ${inviteUrl}`);
-    setTimeout(() => elements.copyInviteText.textContent = 'Copiar Link do Amigo', 2500);
+    setTimeout(() => elements.copyInviteText.textContent = 'Convidar Amigo', 2500);
   }).catch(() => {
     prompt('Copie o link abaixo:', inviteUrl);
   });
@@ -1420,12 +1398,12 @@ function setupEventListeners() {
       state.voiceMode = e.target.value;
       if (state.voiceMode === 'ptt') {
         setMicEnabled(false);
-        elements.selfMicState.textContent = 'Push-to-Talk (Segure V)';
-        showToast('🎙️ Modo Push-to-Talk (Segure V)');
+        elements.selfMicState.textContent = 'Push-to-Talk (V)';
+        showToast('🎙️ Push-to-Talk (Segure V)');
       } else {
         setMicEnabled(!state.isMicMuted);
-        elements.selfMicState.textContent = state.isMicMuted ? 'Mutado' : 'Microfone Ativo';
-        showToast('🎙️ Detecção Automática de Voz');
+        elements.selfMicState.textContent = state.isMicMuted ? 'Mutado' : 'Microfone Aberto';
+        showToast('🎙️ Detecção Automática de Fala');
       }
     });
   });
@@ -1479,7 +1457,7 @@ function setupEventListeners() {
   elements.btnMuteRemote.addEventListener('click', () => {
     elements.remoteVideo.muted = !elements.remoteVideo.muted;
     elements.remoteVolumeSlider.value = elements.remoteVideo.muted ? 0 : elements.remoteVideo.volume;
-    showToast(elements.remoteVideo.muted ? '🔇 Som do jogo mutado' : '🔊 Som do jogo ativado');
+    showToast(elements.remoteVideo.muted ? '🔇 Jogo mutado' : '🔊 Jogo com som');
   });
 
   elements.btnChangeRoom.addEventListener('click', () => {
@@ -1493,11 +1471,12 @@ function setupEventListeners() {
 
   elements.usernameInput.addEventListener('change', (e) => {
     state.username = e.target.value.trim() || 'Usuário';
-    elements.selfVoiceName.textContent = `${state.username} (Você)`;
+    elements.selfVoiceName.textContent = state.username;
+    elements.myAvatarMini.textContent = state.username.substring(0, 2).toUpperCase();
     sendSignaling({ type: 'set-username', username: state.username });
   });
 
-  // Chat submit (Texto)
+  // Chat submit
   elements.chatForm.addEventListener('submit', (e) => {
     e.preventDefault();
     const text = elements.chatInput.value.trim();
@@ -1510,11 +1489,8 @@ function setupEventListeners() {
     elements.chatInput.value = '';
   });
 
-  // Anexar Arquivos
-  elements.btnAttachFile.addEventListener('click', () => {
-    elements.chatFileInput.click();
-  });
-
+  // Arquivos
+  elements.btnAttachFile.addEventListener('click', () => elements.chatFileInput.click());
   elements.chatFileInput.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (file) {
@@ -1523,7 +1499,7 @@ function setupEventListeners() {
     }
   });
 
-  // Drag & Drop no Chat
+  // Drag & Drop
   const dropZone = elements.chatSidebar;
   dropZone.addEventListener('dragover', (e) => {
     e.preventDefault();
@@ -1544,7 +1520,7 @@ function setupEventListeners() {
     }
   });
 
-  // Link Fixado (Modal e Ações)
+  // Link Fixado
   elements.btnPinLinkPrompt.addEventListener('click', () => {
     elements.pinLinkModal.style.display = 'flex';
     elements.inputPinUrl.focus();
@@ -1557,18 +1533,18 @@ function setupEventListeners() {
     const url = elements.inputPinUrl.value.trim();
     const title = elements.inputPinTitle.value.trim();
     if (!url) {
-      showToast('⚠️ Insira um link válido para fixar.');
+      showToast('⚠️ Digite uma URL válida.');
       return;
     }
     pinCurrentLink(url, title);
   });
 
   elements.btnUnpinLink.addEventListener('click', unpinLink);
+  elements.btnUnpinMedia.addEventListener('click', unpinLink);
 
-  // Presets Rápidos de Link Fixado
-  document.querySelectorAll('.preset-tag').forEach(tag => {
-    tag.addEventListener('click', () => {
-      const preset = tag.getAttribute('data-preset');
+  document.querySelectorAll('.preset-pill').forEach(pill => {
+    pill.addEventListener('click', () => {
+      const preset = pill.getAttribute('data-preset');
       if (preset === 'spotify') {
         elements.inputPinUrl.placeholder = 'https://spotify.link/...';
         elements.inputPinTitle.value = '🎵 Spotify Jam - Bora ouvir juntos!';
@@ -1584,7 +1560,7 @@ function setupEventListeners() {
   });
 }
 
-// Inicializar aplicação
+// Inicializar
 window.addEventListener('DOMContentLoaded', async () => {
   setupEventListeners();
   await initNetworkInfo();

@@ -1,4 +1,4 @@
-// TelaViewer - WebRTC P2P Screen Sharing & Voice Chat Client (Correção de Glare e Negociação Perfeita)
+// TelaViewer - WebRTC P2P Screen Sharing, Voice Chat & Advanced Chat (File Transfer + Pinned Links)
 
 const state = {
   ws: null,
@@ -44,7 +44,10 @@ const state = {
   unreadCount: 0,
   isChatOpen: false,
   remotePeerId: null,
-  remoteUsername: 'Amigo'
+  remoteUsername: 'Amigo',
+
+  // Link Fixado
+  pinnedLink: null
 };
 
 // Configuração WebRTC
@@ -128,7 +131,7 @@ const elements = {
   statBitrate: document.getElementById('statBitrate'),
   statPing: document.getElementById('statPing'),
   
-  // Chat
+  // Chat Avançado
   btnToggleChat: document.getElementById('btnToggleChat'),
   chatSidebar: document.getElementById('chatSidebar'),
   btnCloseChat: document.getElementById('btnCloseChat'),
@@ -136,6 +139,25 @@ const elements = {
   chatForm: document.getElementById('chatForm'),
   chatInput: document.getElementById('chatInput'),
   chatUnreadBadge: document.getElementById('chatUnreadBadge'),
+  btnAttachFile: document.getElementById('btnAttachFile'),
+  chatFileInput: document.getElementById('chatFileInput'),
+  dragDropOverlay: document.getElementById('dragDropOverlay'),
+  
+  // Link Fixado
+  btnPinLinkPrompt: document.getElementById('btnPinLinkPrompt'),
+  pinnedLinkBar: document.getElementById('pinnedLinkBar'),
+  pinnedLinkIcon: document.getElementById('pinnedLinkIcon'),
+  pinnedLinkTitle: document.getElementById('pinnedLinkTitle'),
+  btnOpenPinned: document.getElementById('btnOpenPinned'),
+  btnUnpinLink: document.getElementById('btnUnpinLink'),
+  
+  // Modal de Link Fixado
+  pinLinkModal: document.getElementById('pinLinkModal'),
+  btnClosePinModal: document.getElementById('btnClosePinModal'),
+  btnCancelPin: document.getElementById('btnCancelPin'),
+  btnConfirmPin: document.getElementById('btnConfirmPin'),
+  inputPinUrl: document.getElementById('inputPinUrl'),
+  inputPinTitle: document.getElementById('inputPinTitle'),
   
   // Toast
   toast: document.getElementById('toast')
@@ -570,7 +592,6 @@ async function handleSignalingMessage(data) {
         elements.friendVoiceName.textContent = state.remoteUsername;
         elements.voiceCount.textContent = '2 conectados';
       }
-      // O novo peer que entra é quem cria a oferta para os existentes
       for (const peer of data.peers) {
         initiatePeerConnection(peer.id);
       }
@@ -584,8 +605,6 @@ async function handleSignalingMessage(data) {
 
       showToast(`👋 ${state.remoteUsername} entrou na sala!`);
       appendSystemMessage(`${state.remoteUsername} entrou.`);
-      
-      // Apenas prepara o peer connection local e aguarda a oferta do peer que chegou
       getOrCreatePeerConnection(data.peer.id);
       break;
 
@@ -621,11 +640,19 @@ async function handleSignalingMessage(data) {
     case 'chat-message':
       handleIncomingChat(data);
       break;
+
+    case 'chat-file':
+      handleIncomingFile(data);
+      break;
+
+    case 'pinned-link-update':
+      handlePinnedLinkUpdate(data.pinnedLink);
+      break;
   }
 }
 
 // ============================================================================
-// WebRTC Gerenciamento P2P com Fila de ICE Candidates e Prevenção de Glare
+// WebRTC Gerenciamento P2P
 // ============================================================================
 function getOrCreatePeerConnection(peerId) {
   if (state.peerConnections.has(peerId)) {
@@ -636,13 +663,11 @@ function getOrCreatePeerConnection(peerId) {
   const pc = new RTCPeerConnection(rtcConfig);
   state.peerConnections.set(peerId, pc);
 
-  // Adicionar transceivers com direction sendrecv para áudio e vídeo
   try {
     pc.addTransceiver('audio', { direction: 'sendrecv' });
     pc.addTransceiver('video', { direction: 'sendrecv' });
   } catch (e) {}
 
-  // Anexar áudio do microfone local se disponível
   if (state.localVoiceStream) {
     const voiceTrack = state.localVoiceStream.getAudioTracks()[0];
     if (voiceTrack) {
@@ -672,12 +697,11 @@ function getOrCreatePeerConnection(peerId) {
       updateStatus('connected', 'P2P Direto Ativo (60 FPS)');
       startStatsMonitor(pc);
     } else if (pc.iceConnectionState === 'failed') {
-      console.warn('[WebRTC] Tentando reiniciar ICE...');
+      console.warn('[WebRTC] Reiniciando ICE...');
       pc.restartIce();
     }
   };
 
-  // Recebimento de Tracks Remotos
   pc.ontrack = (event) => {
     console.log('[WebRTC ontrack] Track recebido:', event.track.kind, event.streams);
     const track = event.track;
@@ -693,10 +717,7 @@ function getOrCreatePeerConnection(peerId) {
       
       const vol = parseFloat(elements.friendVoiceVolume.value) || 1.0;
       elements.remoteVoiceAudio.volume = Math.min(1.0, vol);
-      
-      elements.remoteVoiceAudio.play().catch(err => {
-        console.warn('Autoplay aguardando interação:', err);
-      });
+      elements.remoteVoiceAudio.play().catch(() => {});
 
       setupFriendAudioAnalyser(stream);
       elements.friendMicState.textContent = 'Conectado (Ouvindo)';
@@ -709,7 +730,6 @@ function getOrCreatePeerConnection(peerId) {
 async function initiatePeerConnection(peerId) {
   const pc = getOrCreatePeerConnection(peerId);
   try {
-    console.log('[WebRTC] Criando oferta para:', peerId);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
@@ -719,30 +739,22 @@ async function initiatePeerConnection(peerId) {
       offer: offer
     });
   } catch (err) {
-    console.error('[WebRTC] Erro ao criar oferta:', err);
+    console.error('[WebRTC] Erro oferta:', err);
   }
 }
 
 async function handleOffer(data) {
   const pc = getOrCreatePeerConnection(data.sender);
   try {
-    console.log('[WebRTC] Recebida oferta de:', data.sender, 'SignalingState:', pc.signalingState);
-
-    // Se estivermos em have-local-offer (Glare), tratamos com rollback
     if (pc.signalingState === 'have-local-offer') {
       const isPolite = state.myId < data.sender;
-      if (!isPolite) {
-        console.warn('[WebRTC Glare] Ignorando oferta concorrente (impolite)');
-        return;
-      }
-      console.log('[WebRTC Glare] Fazendo rollback');
+      if (!isPolite) return;
       await pc.setLocalDescription({ type: 'rollback' });
     }
 
     await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
     await flushQueuedCandidates(data.sender, pc);
 
-    // Anexar microfone local se disponível
     if (state.localVoiceStream) {
       const voiceTrack = state.localVoiceStream.getAudioTracks()[0];
       if (voiceTrack) {
@@ -756,7 +768,6 @@ async function handleOffer(data) {
       }
     }
 
-    // Anexar tela local se estiver compartilhando
     if (state.localStream) {
       const videoTrack = state.localStream.getVideoTracks()[0];
       if (videoTrack) {
@@ -778,7 +789,6 @@ async function handleOffer(data) {
       target: data.sender,
       answer: answer
     });
-    console.log('[WebRTC] Answer enviado com sucesso para:', data.sender);
   } catch (err) {
     console.error('[WebRTC] Erro no handleOffer:', err);
   }
@@ -788,11 +798,9 @@ async function handleAnswer(data) {
   const pc = state.peerConnections.get(data.sender);
   if (pc) {
     try {
-      console.log('[WebRTC] Recebido answer de:', data.sender, 'SignalingState:', pc.signalingState);
       if (pc.signalingState === 'have-local-offer') {
         await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
         await flushQueuedCandidates(data.sender, pc);
-        console.log('[WebRTC] Conexão P2P estabelecida!');
       }
     } catch (err) {
       console.error('[WebRTC] Erro no handleAnswer:', err);
@@ -805,9 +813,7 @@ async function handleIceCandidate(data) {
   if (pc && pc.remoteDescription && pc.remoteDescription.type) {
     try {
       await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-    } catch (err) {
-      console.error('[WebRTC] Erro ICE candidate:', err);
-    }
+    } catch (err) {}
   } else {
     if (!state.iceCandidatesQueue.has(data.sender)) {
       state.iceCandidatesQueue.set(data.sender, []);
@@ -821,9 +827,7 @@ async function flushQueuedCandidates(peerId, pc) {
   for (const cand of queued) {
     try {
       await pc.addIceCandidate(new RTCIceCandidate(cand));
-    } catch (e) {
-      console.warn('Erro ao aplicar candidato enfileirado:', e);
-    }
+    } catch (e) {}
   }
   state.iceCandidatesQueue.delete(peerId);
 }
@@ -845,11 +849,8 @@ function closePeer(peerId) {
 // Compartilhamento de Tela
 // ============================================================================
 async function toggleScreenShare() {
-  if (state.isSharing) {
-    stopScreenShare();
-  } else {
-    await startScreenShare();
-  }
+  if (state.isSharing) stopScreenShare();
+  else await startScreenShare();
 }
 
 async function startScreenShare() {
@@ -895,7 +896,6 @@ async function startScreenShare() {
         pc.addTrack(audioTrack, stream);
       }
 
-      // Se a conexão estiver estável, renegociar
       if (pc.signalingState === 'stable') {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
@@ -932,7 +932,7 @@ function stopScreenShare() {
   for (const [peerId, pc] of state.peerConnections.entries()) {
     pc.getSenders().forEach(sender => {
       if (sender.track && sender.track.kind === 'video') {
-        try { sender.replaceTrack(null); } catch (e) {}
+        try { pc.removeTrack(sender); } catch (e) {}
       }
     });
   }
@@ -945,14 +945,12 @@ function stopScreenShare() {
 // Exibição e Controles do Stream Remoto
 // ============================================================================
 function displayRemoteStream(stream, peerId) {
-  console.log('[Display] Exibindo stream remoto de vídeo');
   elements.remoteVideo.srcObject = stream;
   elements.emptyPlaceholder.style.display = 'none';
   elements.remoteLivePill.style.display = 'inline-block';
   elements.remotePeerTag.textContent = `${state.remoteUsername} (Ao Vivo)`;
 
   elements.remoteVideo.play().catch(err => {
-    console.warn('[Display] Autoplay:', err);
     elements.remoteVideo.muted = true;
     elements.remoteVideo.play();
   });
@@ -1101,19 +1099,21 @@ function stopStatsMonitor() {
 }
 
 // ============================================================================
-// Chat de Texto
+// Chat Avançado: Texto, Transferência de Arquivos e Links Fixados
 // ============================================================================
 function handleIncomingChat(data) {
   const isSelf = data.sender === state.myId;
   const msgEl = document.createElement('div');
   msgEl.className = `chat-msg ${isSelf ? 'self' : 'other'}`;
   
+  const formattedText = autoLinkify(escapeHtml(data.text));
+
   msgEl.innerHTML = `
     <div class="chat-msg-meta">
       <span>${escapeHtml(data.username || 'Amigo')}</span>
       <span>${data.time}</span>
     </div>
-    <div class="chat-msg-bubble">${escapeHtml(data.text)}</div>
+    <div class="chat-msg-bubble">${formattedText}</div>
   `;
   
   elements.chatMessages.appendChild(msgEl);
@@ -1124,6 +1124,192 @@ function handleIncomingChat(data) {
     elements.chatUnreadBadge.textContent = state.unreadCount;
     elements.chatUnreadBadge.style.display = 'inline-block';
   }
+}
+
+function handleIncomingFile(data) {
+  const isSelf = data.sender === state.myId;
+  const msgEl = document.createElement('div');
+  msgEl.className = `chat-msg ${isSelf ? 'self' : 'other'}`;
+
+  const isImage = data.fileType && data.fileType.startsWith('image/');
+  const isAudio = data.fileType && data.fileType.startsWith('audio/');
+  const formattedSize = formatBytes(data.fileSize);
+
+  let mediaHtml = '';
+  if (isImage) {
+    mediaHtml = `<img src="${data.fileData}" class="chat-image-preview" alt="${escapeHtml(data.fileName)}" title="Clique para abrir imagem original">`;
+  } else if (isAudio) {
+    mediaHtml = `<audio controls class="chat-audio-player" src="${data.fileData}"></audio>`;
+  }
+
+  msgEl.innerHTML = `
+    <div class="chat-msg-meta">
+      <span>${escapeHtml(data.username || 'Amigo')}</span>
+      <span>${data.time}</span>
+    </div>
+    <div class="chat-msg-bubble">
+      ${mediaHtml}
+      <div class="chat-file-card">
+        <div class="file-icon">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+          </svg>
+        </div>
+        <div class="file-details">
+          <span class="file-name" title="${escapeHtml(data.fileName)}">${escapeHtml(data.fileName)}</span>
+          <span class="file-size">${formattedSize}</span>
+        </div>
+        <button type="button" class="btn-file-download" title="Baixar Arquivo">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+        </button>
+      </div>
+    </div>
+  `;
+
+  // Listener para download do arquivo
+  const downloadBtn = msgEl.querySelector('.btn-file-download');
+  if (downloadBtn) {
+    downloadBtn.addEventListener('click', () => {
+      const a = document.createElement('a');
+      a.href = data.fileData;
+      a.download = data.fileName;
+      a.click();
+    });
+  }
+
+  // Se for imagem, clique abre em nova guia
+  const imgPreview = msgEl.querySelector('.chat-image-preview');
+  if (imgPreview) {
+    imgPreview.addEventListener('click', () => {
+      const win = window.open();
+      win.document.write(`<img src="${data.fileData}" style="max-width:100%;">`);
+    });
+  }
+
+  elements.chatMessages.appendChild(msgEl);
+  elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+
+  if (!state.isChatOpen && !isSelf) {
+    state.unreadCount++;
+    elements.chatUnreadBadge.textContent = state.unreadCount;
+    elements.chatUnreadBadge.style.display = 'inline-block';
+    showToast(`📁 ${data.username} enviou um arquivo: ${data.fileName}`);
+  }
+}
+
+// Envio de Arquivo Local
+function sendFile(file) {
+  if (!file) return;
+
+  // Limite razoável de 150MB por arquivo para transferência via WebSockets
+  if (file.size > 150 * 1024 * 1024) {
+    showToast('⚠️ O arquivo excede o limite de 150MB.');
+    return;
+  }
+
+  showToast(`⏳ Enviando ${file.name}...`);
+  const reader = new FileReader();
+
+  reader.onload = () => {
+    sendSignaling({
+      type: 'chat-file',
+      fileName: file.name,
+      fileSize: file.size,
+      fileType: file.type,
+      fileData: reader.result
+    });
+    showToast(`✅ Arquivo ${file.name} enviado!`);
+  };
+
+  reader.readAsDataURL(file);
+}
+
+// Links Fixados (Spotify Jam, Twitch, YouTube, etc.)
+function handlePinnedLinkUpdate(pinData) {
+  state.pinnedLink = pinData;
+  if (!pinData) {
+    elements.pinnedLinkBar.style.display = 'none';
+    return;
+  }
+
+  elements.pinnedLinkTitle.textContent = pinData.title;
+  elements.pinnedLinkTitle.href = pinData.url;
+  elements.btnOpenPinned.href = pinData.url;
+
+  // Escolha do ícone
+  const iconType = pinData.iconType || detectLinkType(pinData.url);
+  elements.pinnedLinkIcon.className = `pinned-link-icon ${iconType}`;
+
+  if (iconType === 'spotify') {
+    elements.pinnedLinkIcon.innerHTML = `
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+        <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm4.586 14.424a.625.625 0 0 1-.86.207c-2.355-1.439-5.32-1.764-8.814-.964a.624.624 0 1 1-.278-1.218c3.824-.875 7.106-.5 9.745 1.115a.625.625 0 0 1 .207.86zm1.226-2.729a.782.782 0 0 1-1.077.258c-2.697-1.658-6.808-2.138-9.998-1.17a.782.782 0 1 1-.453-1.498c3.642-1.106 8.19-.57 11.27 1.333a.782.782 0 0 1 .258 1.077zm.105-2.836C14.685 9.07 9.355 8.89 6.26 9.83a.937.937 0 1 1-.548-1.792c3.553-1.078 9.43-.872 13.15 1.336a.937.937 0 0 1-1.045 1.585z"/>
+      </svg>`;
+  } else if (iconType === 'youtube') {
+    elements.pinnedLinkIcon.innerHTML = `
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+        <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+      </svg>`;
+  } else if (iconType === 'twitch') {
+    elements.pinnedLinkIcon.innerHTML = `
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+        <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z"/>
+      </svg>`;
+  } else {
+    elements.pinnedLinkIcon.innerHTML = `
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+      </svg>`;
+  }
+
+  elements.pinnedLinkBar.style.display = 'flex';
+  showToast(`📌 Link fixado por ${pinData.pinnedBy}: ${pinData.title}`);
+}
+
+function detectLinkType(url) {
+  const lower = url.toLowerCase();
+  if (lower.includes('spotify.com') || lower.includes('spotify.link')) return 'spotify';
+  if (lower.includes('youtube.com') || lower.includes('youtu.be')) return 'youtube';
+  if (lower.includes('twitch.tv')) return 'twitch';
+  return 'web';
+}
+
+function pinCurrentLink(url, customTitle) {
+  if (!url) return;
+  const iconType = detectLinkType(url);
+  let title = customTitle.trim();
+  
+  if (!title) {
+    if (iconType === 'spotify') title = '🎵 Spotify Jam - Ouvir Juntos';
+    else if (iconType === 'youtube') title = '🎥 Vídeo do YouTube';
+    else if (iconType === 'twitch') title = '🟣 Live na Twitch';
+    else title = url;
+  }
+
+  sendSignaling({
+    type: 'pin-link',
+    url: url,
+    title: title,
+    iconType: iconType
+  });
+
+  elements.pinLinkModal.style.display = 'none';
+  elements.inputPinUrl.value = '';
+  elements.inputPinTitle.value = '';
+}
+
+function unpinLink() {
+  sendSignaling({ type: 'unpin-link' });
+  elements.pinnedLinkBar.style.display = 'none';
+  showToast('Link desafixado do chat.');
 }
 
 function appendSystemMessage(text) {
@@ -1145,6 +1331,20 @@ function toggleChat() {
     elements.chatSidebar.classList.remove('open');
     elements.btnToggleChat.classList.remove('active');
   }
+}
+
+function autoLinkify(text) {
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  return text.replace(urlRegex, url => `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:var(--accent-color); text-decoration:underline;">${url}</a>`);
+}
+
+function formatBytes(bytes, decimals = 1) {
+  if (!bytes) return '0 B';
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }
 
 // ============================================================================
@@ -1206,20 +1406,12 @@ function setupEventListeners() {
   elements.voiceSettingsMenu.addEventListener('click', (e) => e.stopPropagation());
 
   // Seleção de Dispositivos
-  elements.selectMicDevice.addEventListener('change', (e) => {
-    switchMicrophone(e.target.value);
-  });
-
-  elements.selectSpeakerDevice.addEventListener('change', (e) => {
-    switchAudioOutput(e.target.value);
-  });
-
+  elements.selectMicDevice.addEventListener('change', (e) => switchMicrophone(e.target.value));
+  elements.selectSpeakerDevice.addEventListener('change', (e) => switchAudioOutput(e.target.value));
   elements.btnTestSpeaker.addEventListener('click', playSpeakerTestSound);
 
   if (navigator.mediaDevices && navigator.mediaDevices.ondevicechange !== undefined) {
-    navigator.mediaDevices.ondevicechange = () => {
-      populateAudioDevices();
-    };
+    navigator.mediaDevices.ondevicechange = () => populateAudioDevices();
   }
 
   // Modo de Voz
@@ -1238,7 +1430,6 @@ function setupEventListeners() {
     });
   });
 
-  // Volume da voz do amigo
   elements.friendVoiceVolume.addEventListener('input', (e) => {
     const val = parseFloat(e.target.value);
     const percent = Math.round(val * 100);
@@ -1246,14 +1437,10 @@ function setupEventListeners() {
     elements.remoteVoiceAudio.volume = Math.min(1.0, val);
   });
 
-  // Microfone e Ensurdecer
   elements.btnToggleMic.addEventListener('click', toggleMute);
   elements.btnToggleDeafen.addEventListener('click', toggleDeafen);
-
-  // Convite
   elements.btnCopyInvite.addEventListener('click', copyInviteLink);
 
-  // Extras
   elements.btnRecord.addEventListener('click', toggleRecording);
   elements.btnScreenshot.addEventListener('click', takeScreenshot);
   elements.btnToggleStats.addEventListener('click', () => {
@@ -1285,7 +1472,6 @@ function setupEventListeners() {
     } catch (e) {}
   });
 
-  // Volume do Jogo/Tela
   elements.remoteVolumeSlider.addEventListener('input', (e) => {
     elements.remoteVideo.volume = e.target.value;
   });
@@ -1296,31 +1482,22 @@ function setupEventListeners() {
     showToast(elements.remoteVideo.muted ? '🔇 Som do jogo mutado' : '🔊 Som do jogo ativado');
   });
 
-  // Alterar Sala
   elements.btnChangeRoom.addEventListener('click', () => {
     const newRoom = elements.roomInput.value.trim();
     if (newRoom && newRoom !== state.room) {
       state.room = newRoom;
-      sendSignaling({
-        type: 'join',
-        room: state.room,
-        username: state.username
-      });
+      sendSignaling({ type: 'join', room: state.room, username: state.username });
       showToast(`Entrou na sala: ${newRoom}`);
     }
   });
 
-  // Alterar Nome
   elements.usernameInput.addEventListener('change', (e) => {
     state.username = e.target.value.trim() || 'Usuário';
     elements.selfVoiceName.textContent = `${state.username} (Você)`;
-    sendSignaling({
-      type: 'set-username',
-      username: state.username
-    });
+    sendSignaling({ type: 'set-username', username: state.username });
   });
 
-  // Chat
+  // Chat submit (Texto)
   elements.chatForm.addEventListener('submit', (e) => {
     e.preventDefault();
     const text = elements.chatInput.value.trim();
@@ -1331,6 +1508,79 @@ function setupEventListeners() {
       text: text
     });
     elements.chatInput.value = '';
+  });
+
+  // Anexar Arquivos
+  elements.btnAttachFile.addEventListener('click', () => {
+    elements.chatFileInput.click();
+  });
+
+  elements.chatFileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      sendFile(file);
+      elements.chatFileInput.value = '';
+    }
+  });
+
+  // Drag & Drop no Chat
+  const dropZone = elements.chatSidebar;
+  dropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    elements.dragDropOverlay.classList.add('active');
+  });
+
+  dropZone.addEventListener('dragleave', (e) => {
+    if (!dropZone.contains(e.relatedTarget)) {
+      elements.dragDropOverlay.classList.remove('active');
+    }
+  });
+
+  dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    elements.dragDropOverlay.classList.remove('active');
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      sendFile(e.dataTransfer.files[0]);
+    }
+  });
+
+  // Link Fixado (Modal e Ações)
+  elements.btnPinLinkPrompt.addEventListener('click', () => {
+    elements.pinLinkModal.style.display = 'flex';
+    elements.inputPinUrl.focus();
+  });
+
+  elements.btnClosePinModal.addEventListener('click', () => elements.pinLinkModal.style.display = 'none');
+  elements.btnCancelPin.addEventListener('click', () => elements.pinLinkModal.style.display = 'none');
+
+  elements.btnConfirmPin.addEventListener('click', () => {
+    const url = elements.inputPinUrl.value.trim();
+    const title = elements.inputPinTitle.value.trim();
+    if (!url) {
+      showToast('⚠️ Insira um link válido para fixar.');
+      return;
+    }
+    pinCurrentLink(url, title);
+  });
+
+  elements.btnUnpinLink.addEventListener('click', unpinLink);
+
+  // Presets Rápidos de Link Fixado
+  document.querySelectorAll('.preset-tag').forEach(tag => {
+    tag.addEventListener('click', () => {
+      const preset = tag.getAttribute('data-preset');
+      if (preset === 'spotify') {
+        elements.inputPinUrl.placeholder = 'https://spotify.link/...';
+        elements.inputPinTitle.value = '🎵 Spotify Jam - Bora ouvir juntos!';
+      } else if (preset === 'youtube') {
+        elements.inputPinUrl.placeholder = 'https://youtube.com/watch?v=...';
+        elements.inputPinTitle.value = '🎥 Vídeo do YouTube';
+      } else if (preset === 'twitch') {
+        elements.inputPinUrl.placeholder = 'https://twitch.tv/...';
+        elements.inputPinTitle.value = '🟣 Live na Twitch';
+      }
+      elements.inputPinUrl.focus();
+    });
   });
 }
 

@@ -101,6 +101,8 @@ async function startServer() {
     return peers;
   }
 
+  const roomPinnedLinks = new Map(); // room -> { url, title, iconType, pinnedBy }
+
   wss.on('connection', (ws) => {
     const clientId = 'peer_' + Math.random().toString(36).substring(2, 9);
     clients.set(ws, {
@@ -131,6 +133,14 @@ async function startServer() {
               type: 'peers-list',
               peers: peers
             }));
+
+            // Enviar link fixado da sala (se houver)
+            if (roomPinnedLinks.has(clientInfo.room)) {
+              ws.send(JSON.stringify({
+                type: 'pinned-link-update',
+                pinnedLink: roomPinnedLinks.get(clientInfo.room)
+              }));
+            }
 
             broadcastToRoom(clientInfo.room, {
               type: 'peer-joined',
@@ -183,13 +193,55 @@ async function startServer() {
             break;
           }
 
+          // Mensagens de Texto
           case 'chat-message': {
             broadcastToRoom(clientInfo.room, {
               type: 'chat-message',
               sender: clientInfo.id,
               username: clientInfo.username,
               text: data.text,
-              time: new Date().toLocaleTimeString()
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            });
+            break;
+          }
+
+          // Envio de Arquivos
+          case 'chat-file': {
+            broadcastToRoom(clientInfo.room, {
+              type: 'chat-file',
+              sender: clientInfo.id,
+              username: clientInfo.username,
+              fileName: data.fileName,
+              fileSize: data.fileSize,
+              fileType: data.fileType,
+              fileData: data.fileData,
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            });
+            break;
+          }
+
+          // Fixar Link na Sala (Spotify Jam, Twitch, etc.)
+          case 'pin-link': {
+            const pinData = {
+              url: data.url,
+              title: data.title || data.url,
+              iconType: data.iconType || 'web',
+              pinnedBy: clientInfo.username
+            };
+            roomPinnedLinks.set(clientInfo.room, pinData);
+            broadcastToRoom(clientInfo.room, {
+              type: 'pinned-link-update',
+              pinnedLink: pinData
+            });
+            break;
+          }
+
+          // Desafixar Link
+          case 'unpin-link': {
+            roomPinnedLinks.delete(clientInfo.room);
+            broadcastToRoom(clientInfo.room, {
+              type: 'pinned-link-update',
+              pinnedLink: null
             });
             break;
           }
@@ -210,6 +262,7 @@ async function startServer() {
       }
     });
   });
+
 
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {

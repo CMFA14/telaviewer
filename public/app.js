@@ -655,6 +655,15 @@ async function handleSignalingMessage(data) {
       await handleIceCandidate(data);
       break;
 
+    case 'chat-history':
+      if (Array.isArray(data.history)) {
+        data.history.forEach(item => {
+          if (item.type === 'chat-file') handleIncomingFile(item);
+          else if (item.type === 'chat-message') handleIncomingChat(item);
+        });
+      }
+      break;
+
     case 'chat-message':
       handleIncomingChat(data);
       break;
@@ -668,6 +677,8 @@ async function handleSignalingMessage(data) {
       break;
   }
 }
+
+
 
 // ============================================================================
 // WebRTC Gerenciamento P2P
@@ -1464,6 +1475,7 @@ function setupEventListeners() {
     const newRoom = elements.roomInput.value.trim();
     if (newRoom && newRoom !== state.room) {
       state.room = newRoom;
+      localStorage.setItem('telaviewer_room', state.room);
       sendSignaling({ type: 'join', room: state.room, username: state.username });
       showToast(`Entrou na sala: ${newRoom}`);
     }
@@ -1471,6 +1483,7 @@ function setupEventListeners() {
 
   elements.usernameInput.addEventListener('change', (e) => {
     state.username = e.target.value.trim() || 'Usuário';
+    localStorage.setItem('telaviewer_username', state.username);
     elements.selfVoiceName.textContent = state.username;
     elements.myAvatarMini.textContent = state.username.substring(0, 2).toUpperCase();
     sendSignaling({ type: 'set-username', username: state.username });
@@ -1558,12 +1571,37 @@ function setupEventListeners() {
       elements.inputPinUrl.focus();
     });
   });
+
+  // Proteção contra recarregamento acidental durante transmissão
+  window.addEventListener('beforeunload', (e) => {
+    if (state.isSharing || (state.peerConnections && state.peerConnections.size > 0)) {
+      e.preventDefault();
+      e.returnValue = 'Você está transmitindo tela ou em chamada de voz ativa. Tem certeza de que deseja sair?';
+      return e.returnValue;
+    }
+  });
 }
 
 // Inicializar
 window.addEventListener('DOMContentLoaded', async () => {
+  // Restaurar preferências salvas
+  const savedUser = localStorage.getItem('telaviewer_username');
+  if (savedUser) {
+    state.username = savedUser;
+    elements.usernameInput.value = savedUser;
+    elements.selfVoiceName.textContent = savedUser;
+    elements.myAvatarMini.textContent = savedUser.substring(0, 2).toUpperCase();
+  }
+
+  const savedRoom = localStorage.getItem('telaviewer_room');
+  if (savedRoom) {
+    state.room = savedRoom;
+    elements.roomInput.value = savedRoom;
+  }
+
   setupEventListeners();
   await initNetworkInfo();
   await initVoiceChat();
   connectSignaling();
 });
+

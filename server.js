@@ -102,6 +102,18 @@ async function startServer() {
   }
 
   const roomPinnedLinks = new Map(); // room -> { url, title, iconType, pinnedBy }
+  const roomChatHistory = new Map(); // room -> Array<Message> (mantém até 100 mensagens)
+
+  function addChatToHistory(room, msg) {
+    if (!roomChatHistory.has(room)) {
+      roomChatHistory.set(room, []);
+    }
+    const history = roomChatHistory.get(room);
+    history.push(msg);
+    if (history.length > 100) {
+      history.shift();
+    }
+  }
 
   wss.on('connection', (ws) => {
     const clientId = 'peer_' + Math.random().toString(36).substring(2, 9);
@@ -133,6 +145,14 @@ async function startServer() {
               type: 'peers-list',
               peers: peers
             }));
+
+            // Enviar histórico do chat da sala ao entrar/recarregar
+            if (roomChatHistory.has(clientInfo.room)) {
+              ws.send(JSON.stringify({
+                type: 'chat-history',
+                history: roomChatHistory.get(clientInfo.room)
+              }));
+            }
 
             // Enviar link fixado da sala (se houver)
             if (roomPinnedLinks.has(clientInfo.room)) {
@@ -193,21 +213,23 @@ async function startServer() {
             break;
           }
 
-          // Mensagens de Texto
+          // Mensagens de Texto (com persistência)
           case 'chat-message': {
-            broadcastToRoom(clientInfo.room, {
+            const msgObj = {
               type: 'chat-message',
               sender: clientInfo.id,
               username: clientInfo.username,
               text: data.text,
               time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-            });
+            };
+            addChatToHistory(clientInfo.room, msgObj);
+            broadcastToRoom(clientInfo.room, msgObj);
             break;
           }
 
-          // Envio de Arquivos
+          // Envio de Arquivos (com persistência)
           case 'chat-file': {
-            broadcastToRoom(clientInfo.room, {
+            const fileObj = {
               type: 'chat-file',
               sender: clientInfo.id,
               username: clientInfo.username,
@@ -216,7 +238,9 @@ async function startServer() {
               fileType: data.fileType,
               fileData: data.fileData,
               time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-            });
+            };
+            addChatToHistory(clientInfo.room, fileObj);
+            broadcastToRoom(clientInfo.room, fileObj);
             break;
           }
 
@@ -250,6 +274,7 @@ async function startServer() {
         console.error('Erro ao processar mensagem:', err);
       }
     });
+
 
     ws.on('close', () => {
       const clientInfo = clients.get(ws);

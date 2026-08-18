@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TelaViewer - Compartilhamento de Tela & Chat de Voz P2P</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<body class="theme-dark">
+  <div class="app-container">
+    <!-- Barra Superior -->
+    <header class="app-header">
+      <div class="header-left">
+        <div class="logo">
+          <div class="logo-icon">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+              <line x1="8" y1="21" x2="16" y2="21"></line>
+              <line x1="12" y1="17" x2="12" y2="21"></line>
+            </svg>
+          </div>
+          <span class="logo-text">Tela<span class="accent">Viewer</span></span>
+        </div>
+        <div class="status-badge" id="connectionStatus">
+          <span class="status-dot"></span>
+          <span class="status-text">Conectando...</span>
+        </div>
+      </div>
+
+      <div class="header-center">
+        <div class="room-pill">
+          <span class="pill-label">Sala:</span>
+          <input type="text" id="roomInput" value="principal" spellcheck="false" title="Nome da sala">
+          <button id="btnChangeRoom" class="btn-icon" title="Entrar na sala">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M5 12h14M12 5l7 7-7 7"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Indicador de Status do Chat de Voz no Header -->
+        <div class="voice-channel-badge" id="voiceChannelBadge">
+          <span class="voice-signal-icon">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+            </svg>
+          </span>
+          <span id="voiceStatusText">Chat de Voz: Ativo</span>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <!-- Botão Copiar Link Radmin -->
+        <div class="radmin-link-container">
+          <button id="btnCopyInvite" class="btn btn-radmin" title="Copiar link para enviar ao seu amigo no Radmin">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+            </svg>
+            <span id="copyInviteText">Copiar Link do Amigo</span>
+          </button>
+        </div>
+
+        <div class="user-profile">
+          <input type="text" id="usernameInput" value="Meu PC" maxlength="15" title="Seu nome">
+        </div>
+      </div>
+    </header>
+
+    <!-- Área Principal de Visualização -->
+    <main class="main-stage" id="mainStage">
+      <!-- Painel de Participantes do Chat de Voz (Estilo Discord) -->
+      <div class="voice-overlay-panel" id="voicePanel">
+        <div class="voice-panel-header">
+          <div class="voice-panel-title">
+            <span class="live-dot-green"></span>
+            <span>Canal de Voz</span>
+          </div>
+          <span class="voice-count" id="voiceCount">2 conectados</span>
+        </div>
+        
+        <div class="voice-users-list" id="voiceUsersList">
+          <!-- Card do Usuário Local -->
+          <div class="voice-user-card" id="voiceUserSelf">
+            <div class="user-avatar-wrapper" id="avatarSelfWrapper">
+              <div class="user-avatar self">EU</div>
+              <div class="speaking-ring"></div>
+            </div>
+            <div class="user-meta">
+              <span class="user-name" id="selfVoiceName">Meu PC (Você)</span>
+              <span class="user-mic-state" id="selfMicState">Microfone Aberto</span>
+            </div>
+            <div class="user-controls">
+              <span class="audio-vu-meter" id="selfVuMeter"><span class="vu-bar"></span></span>
+            </div>
+          </div>
+
+          <!-- Card do Amigo (Peer Remoto) -->
+          <div class="voice-user-card" id="voiceUserFriend">
+            <div class="user-avatar-wrapper" id="avatarFriendWrapper">
+              <div class="user-avatar friend">AM</div>
+              <div class="speaking-ring"></div>
+            </div>
+            <div class="user-meta">
+              <span class="user-name" id="friendVoiceName">Amigo</span>
+              <span class="user-mic-state" id="friendMicState">Aguardando áudio</span>
+            </div>
+            <div class="user-controls">
+              <!-- Slider de volume independente do amigo (0 a 200%) -->
+              <div class="user-volume-adjust" title="Volume da voz do amigo">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                </svg>
+                <input type="range" id="friendVoiceVolume" min="0" max="2" step="0.05" value="1">
+                <span id="friendVoiceVolLabel" class="vol-label">100%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tela Remota (Amigo) -->
+      <div class="stream-card remote-card" id="remoteCard">
+        <div class="stream-header">
+          <div class="stream-info">
+            <span class="peer-tag" id="remotePeerTag">Tela do Amigo</span>
+            <span class="live-pill" id="remoteLivePill" style="display: none;">AO VIVO</span>
+          </div>
+          <div class="stream-actions">
+            <!-- Controle de Volume do Jogo / Tela -->
+            <div class="volume-control" id="remoteVolumeBox">
+              <button id="btnMuteRemote" class="btn-icon-sm" title="Mutar/Desmutar som do jogo/tela">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" id="iconVolume">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                </svg>
+              </button>
+              <input type="range" id="remoteVolumeSlider" min="0" max="1" step="0.05" value="1" title="Volume do jogo / tela">
+            </div>
+            <button id="btnScreenshot" class="btn-icon-sm" title="Tirar foto da tela">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                <circle cx="12" cy="13" r="4"></circle>
+              </svg>
+            </button>
+            <button id="btnPip" class="btn-icon-sm" title="Modo Picture-in-Picture">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                <rect x="12" y="9" width="8" height="6" rx="1" ry="1"></rect>
+              </svg>
+            </button>
+            <button id="btnFullscreen" class="btn-icon-sm" title="Tela Cheia (F11)">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="video-wrapper">
+          <video id="remoteVideo" autoplay playsinline muted></video>
+          
+          <!-- Elemento de áudio dedicado para a voz do amigo -->
+          <audio id="remoteVoiceAudio" autoplay playsinline></audio>
+
+
+          <!-- Overlay de Estatísticas (FPS, Ping, Resolução) -->
+          <div class="stats-overlay" id="statsOverlay">
+            <div class="stat-item"><span class="stat-label">FPS:</span> <span id="statFps" class="stat-value">--</span></div>
+            <div class="stat-item"><span class="stat-label">Resolução:</span> <span id="statRes" class="stat-value">--</span></div>
+            <div class="stat-item"><span class="stat-label">Taxa:</span> <span id="statBitrate" class="stat-value">--</span></div>
+            <div class="stat-item"><span class="stat-label">Latência:</span> <span id="statPing" class="stat-value">--</span></div>
+          </div>
+
+          <!-- Placeholder quando não há transmissão de tela -->
+          <div class="empty-placeholder" id="emptyPlaceholder">
+            <div class="empty-icon">
+              <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                <line x1="8" y1="21" x2="16" y2="21"></line>
+                <line x1="12" y1="17" x2="12" y2="21"></line>
+              </svg>
+            </div>
+            <h3>Nenhuma tela sendo transmitida no momento</h3>
+            <p id="emptyHelpText">O <strong>Chat de Voz</strong> já está ativo! Clique em <strong>"Compartilhar Tela"</strong> abaixo para transmitir jogos ou programas.</p>
+            <div class="quick-ip-info" id="quickIpInfo">
+              <span>Seu IP Radmin detectado: <strong id="detectedRadminIp">Carregando...</strong></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Preview da Sua Própria Tela (Minimizável / Flutuante) -->
+      <div class="local-preview-card" id="localCard" style="display: none;">
+        <div class="local-header">
+          <span>Sua Transmissão</span>
+          <button id="btnCloseLocalPreview" class="btn-icon-xs" title="Minimizar">✕</button>
+        </div>
+        <video id="localVideo" autoplay playsinline muted></video>
+        <div class="local-footer">
+          <span class="live-dot-mini"></span> Transmitindo ao vivo
+        </div>
+      </div>
+    </main>
+
+    <!-- Barra de Controle Inferior (Dock Flutuante) -->
+    <footer class="dock-bar">
+      <!-- Grupo de Vídeo -->
+      <div class="dock-group">
+        <!-- Botão Principal de Compartilhar Tela -->
+        <button id="btnShareScreen" class="dock-btn btn-primary-stream">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+            <path d="M12 12V8m0 0l3 3m-3-3l-3 3"></path>
+            <line x1="8" y1="21" x2="16" y2="21"></line>
+            <line x1="12" y1="17" x2="12" y2="21"></line>
+          </svg>
+          <span id="shareBtnLabel">Compartilhar Tela</span>
+        </button>
+
+        <!-- Seletor de Opções de Qualidade / FPS -->
+        <div class="dropdown-container">
+          <button id="btnQualitySettings" class="dock-btn btn-secondary" title="Configurações de Qualidade e FPS">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+          </button>
+          <div class="dropdown-menu" id="qualityMenu">
+            <div class="dropdown-header">Qualidade de Vídeo</div>
+            <label class="dropdown-item">
+              <input type="radio" name="fpsChoice" value="60" checked>
+              <span>60 FPS (Ultra Fluido / Jogos)</span>
+            </label>
+            <label class="dropdown-item">
+              <input type="radio" name="fpsChoice" value="30">
+              <span>30 FPS (Econômico)</span>
+            </label>
+            <div class="dropdown-divider"></div>
+            <label class="dropdown-item">
+              <input type="checkbox" id="chkAudioSystem" checked>
+              <span>Áudio do Jogo / Sistema</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="dock-separator"></div>
+
+      <!-- Grupo de Chat de Voz -->
+      <div class="dock-group">
+        <!-- Microfone (Mute / Unmute) -->
+        <button id="btnToggleMic" class="dock-btn btn-voice active" title="Ativar/Desativar Microfone (M)">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" id="iconMic">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+            <line x1="12" y1="19" x2="12" y2="23"></line>
+            <line x1="8" y1="23" x2="16" y2="23"></line>
+          </svg>
+          <span id="micLabel">Microfone</span>
+        </button>
+
+        <!-- Ensurdecer / Deafen -->
+        <button id="btnToggleDeafen" class="dock-btn btn-secondary" title="Ensurdecer (Silenciar tudo) (D)">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" id="iconDeafen">
+            <path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
+            <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
+          </svg>
+          <span id="deafenLabel">Fone</span>
+        </button>
+
+        <!-- Configurações de Voz e Modo Push-to-Talk -->
+        <div class="dropdown-container">
+          <button id="btnVoiceSettings" class="dock-btn btn-secondary" title="Configurações de Áudio e Voz">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 6V2m0 20v-4m8-8h4M2 12h4m13.66-5.66l2.83-2.83M3.51 20.49l2.83-2.83m0-11.32L3.51 3.51m16.98 16.98l-2.83-2.83"></path>
+            </svg>
+          </button>
+          <div class="dropdown-menu dropdown-menu-voice" id="voiceSettingsMenu">
+            <div class="dropdown-header">Dispositivos de Áudio</div>
+            <div class="device-select-group">
+              <label class="device-label" for="selectMicDevice">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                </svg>
+                <span>Microfone (Entrada):</span>
+              </label>
+              <select id="selectMicDevice" class="device-select" title="Escolha o microfone"></select>
+            </div>
+
+            <div class="device-select-group">
+              <label class="device-label" for="selectSpeakerDevice">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
+                  <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
+                </svg>
+                <span>Saída (Fone / Alto-falante):</span>
+              </label>
+              <div class="speaker-row">
+                <select id="selectSpeakerDevice" class="device-select" title="Escolha a saída de áudio"></select>
+                <button id="btnTestSpeaker" type="button" class="btn-test-sound" title="Tocar som de teste">Testar</button>
+              </div>
+            </div>
+
+            <div class="dropdown-divider"></div>
+            <div class="dropdown-header">Modo de Voz</div>
+            <label class="dropdown-item">
+              <input type="radio" name="voiceMode" value="vad" checked>
+              <span>Detecção de Voz Automática</span>
+            </label>
+            <label class="dropdown-item">
+              <input type="radio" name="voiceMode" value="ptt">
+              <span>Push-to-Talk (Pressionar 'V')</span>
+            </label>
+            <div class="dropdown-divider"></div>
+            <div class="dropdown-header">Aprimoramento de Áudio</div>
+            <label class="dropdown-item">
+              <input type="checkbox" id="chkNoiseSuppression" checked>
+              <span>Cancelamento de Ruído & Eco</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="dock-separator"></div>
+
+      <!-- Grupo de Ferramentas (Gravação, Stats, Chat) -->
+      <div class="dock-group">
+        <!-- Gravação de Tela -->
+        <button id="btnRecord" class="dock-btn btn-secondary" title="Gravar Vídeo da Transmissão">
+          <span class="record-dot"></span>
+          <span id="recordLabel">Gravar</span>
+        </button>
+
+        <!-- Monitor de Estatísticas -->
+        <button id="btnToggleStats" class="dock-btn btn-secondary" title="Exibir/Ocultar FPS e Latência">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="20" x2="18" y2="10"></line>
+            <line x1="12" y1="20" x2="12" y2="4"></line>
+            <line x1="6" y1="20" x2="6" y2="14"></line>
+          </svg>
+          <span>Stats</span>
+        </button>
+
+        <!-- Chat Lateral -->
+        <button id="btnToggleChat" class="dock-btn btn-secondary" title="Abrir/Fechar Chat">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+          </svg>
+          <span>Chat</span>
+          <span class="unread-badge" id="chatUnreadBadge" style="display: none;">0</span>
+        </button>
+      </div>
+    </footer>
+
+    <!-- Gaveta Lateral de Chat -->
+    <aside class="chat-sidebar" id="chatSidebar">
+      <div class="chat-header">
+        <div class="chat-title">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+          </svg>
+          <span>Chat da Sala</span>
+        </div>
+        <button id="btnCloseChat" class="btn-icon-xs">✕</button>
+      </div>
+
+      <div class="chat-messages" id="chatMessages">
+        <div class="chat-system-msg">
+          Bem-vindo ao <strong>TelaViewer</strong>! Chat de voz e compartilhamento de tela com áudio em alta definição ativos.
+        </div>
+      </div>
+
+      <form class="chat-input-form" id="chatForm">
+        <input type="text" id="chatInput" placeholder="Digite uma mensagem..." autocomplete="off">
+        <button type="submit" class="btn-chat-send">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+        </button>
+      </form>
+    </aside>
+
+    <!-- Notificação Toast Flutuante -->
+    <div class="toast" id="toast"></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "name": "telaviewer",
+  "version": "1.0.0",
+  "description": "Compartilhamento de tela em tempo real via WebRTC e Radmin VPN",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "webrtc",
+    "screen-sharing",
+    "radmin-vpn",
+    "lan-streaming"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.21.2",
+    "selfsigned": "^5.5.0",
+    "ws": "^8.18.0"
+  }
+}
